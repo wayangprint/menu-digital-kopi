@@ -60,15 +60,18 @@ button{font:inherit;cursor:pointer}
 .hero-card .price{color:var(--gold);font-size:19px;font-weight:800;text-shadow:0 2px 8px rgba(0,0,0,.65);margin-top:2px}
 .hero-card .stepper{margin-top:12px}
 
-/* ---------- panggung camilan: stage FIX, carousel geser horizontal biasa
-   (tanpa perubahan ukuran); kartu nama/harga/stepper FIX kiri bawah ---------- */
+/* ---------- panggung camilan: stage FIX, slide diposisikan dengan jarak
+   antar slide RAPAT (pitch 58% lebar stage) supaya camilan berikutnya duduk
+   DEKAT dengan camilan yang tampil — transisi pendek, tanpa ruang kosong
+   lebar antar camilan; ukuran gambar tetap (tanpa scale); kartu
+   nama/harga/stepper FIX kiri bawah. Bingkai foto di dalam slide sama
+   persis seperti sebelumnya: lebar 57% stage kurang 12px, tinggi 180px,
+   tepi kanan 12px dari tepi stage, di tengah vertikal stage. ---------- */
 .snack-sec{position:relative;margin:0 -14px}
 .snack-stage{position:relative;height:196px;overflow:hidden;max-width:460px;margin:0 auto}
-.sc-track{position:absolute;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:grab}
+.sc-track{position:absolute;inset:0;overflow:hidden;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:grab}
 .sc-track:active{cursor:grabbing}
-.sc-track::-webkit-scrollbar{display:none}
-.sc-track.dragging{scroll-snap-type:none}
-.s-slide{flex:0 0 100%;scroll-snap-align:start;display:flex;align-items:center;justify-content:flex-end;padding:8px 12px 8px 43%;cursor:pointer}
+.s-slide{position:absolute;right:12px;top:50%;width:calc(57% - 12px);height:180px;will-change:transform,opacity;pointer-events:none}
 /* BINGKAI TAMPIL SERAGAM untuk semua side dish: satu ukuran + satu rasio
    (7:5) yang sama bagi Waffle Eskrim, Kentang Goreng, dan Risol Mayo.
    CONTAIN (bukan cover): piring/nampan beserta makanannya selalu utuh,
@@ -510,9 +513,10 @@ function changePlain(id, delta){
    bergeser ke kiri sambil mengecil, diikuti produk sesudahnya.
    Kartu nama/harga/stepper hero FIX di kanan tengah — hanya isinya
    (nama, harga, kuantiti) yang berganti mengikuti produk yang tampil. */
-var hcIdx = 0, scIdx = 0, hcTimer = null, hcResumeTimer = null, scScrollTimer = null;
+var hcIdx = 0, scIdx = 0, hcTimer = null, hcResumeTimer = null;
 var scTimer = null, scResumeTimer = null;
 var hPos = 0, hAnim = null, hDrag = null;
+var sPos = 0, sAnim = null, sDrag = null;
 function heroList(){ return MENU.filter(function(m){ return !!m.hero; }); }
 function snackList(){ return MENU.filter(function(m){ return !!m.snack; }); }
 function snackIdxForHero(h){
@@ -661,8 +665,16 @@ function hcPause(){
 
 /* ================= CAMILAN: stage FIX + kartu FIX =================
    Carousel biasa: cutout bergeser horizontal di stage yang tetap, tanpa
-   perubahan ukuran gambar. Kartu nama/harga/stepper FIX di kiri bawah —
-   hanya isinya yang berganti mengikuti camilan yang sedang tampil.
+   perubahan ukuran gambar. Slide diposisikan dengan mesin posisi yang
+   sama seperti hero (posisi float + render per frame), dengan JARAK
+   ANTAR SLIDE RAPAT — pitch hanya 58% lebar stage — supaya camilan
+   berikutnya duduk DEKAT dengan camilan yang tampil: celah antar foto
+   hanya ±16px, transisi pendek, tidak ada ruang kosong lebar antar
+   camilan. Saat diam hanya camilan yang tampil yang terlihat (tetangga
+   tersembunyi penuh); selama transisi tetangga bergeser masuk tepat di
+   sampingnya. Satu camilan tetap tampil penuh di stage FIX-nya; kartu
+   nama/harga/stepper FIX di kiri bawah — hanya isinya yang berganti
+   mengikuti camilan yang sedang tampil.
    Carousel camilan MANDIRI: auto-advance dengan timer sendiri (3,2 dtk,
    berbeda dari timer hero 4,5 dtk) dan TIDAK terhubung ke carousel hero —
    geser hero tidak mengubah camilan, geser camilan tidak mengubah hero.
@@ -671,8 +683,8 @@ function scAutoStart(){
   if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   scAutoStop();
   scTimer = setInterval(function(){
-    var n = snackList().length; if (!n) return;
-    scGo((scIdx + 1) % n);
+    if (!snackList().length) return;
+    sTween(Math.round(sPos) + 1);
   }, 3200);
 }
 function scAutoStop(){ if (scTimer) { clearInterval(scTimer); scTimer = null; } }
@@ -682,16 +694,15 @@ function scPause(){
   scResumeTimer = setTimeout(scAutoStart, 8000);
 }
 function snackSlideHtml(item){
-  return '<div class="s-slide" data-open="' + item.id + '" role="button" aria-label="Lihat detail ' + item.name + '">' +
-    '<img class="s-ph" src="' + item.cut + '" alt="Foto ' + item.name + '" draggable="false" /></div>';
+  return '<div class="s-slide"><img class="s-ph" src="' + item.cut + '" alt="Foto ' + item.name + '" draggable="false" /></div>';
 }
 function renderSnacks(){
   var html = "";
   MENU.forEach(function(m){ if (m.snack) html += snackSlideHtml(m); });
   $("#scTrack").innerHTML = html;
-  bindOpenEvents($("#scTrack"));
-  bindSnackNav();
-  scIdx = 0;
+  bindSnackTrack();
+  sPos = 0; scIdx = 0;
+  sRender();
   updateSnackCard();
 }
 function updateSnackCard(){
@@ -702,84 +713,105 @@ function updateSnackCard(){
   act.innerHTML = stepperHtml(it, false);
   bindActionButtons($("#snackCard"));
 }
-function scStep(){
+function sPitch(){
   var t = $("#scTrack");
-  if (!t || !t.children.length) return 0;
-  return t.children[0].getBoundingClientRect().width;
+  return t ? t.clientWidth * 0.58 : 0;
 }
-function scGo(i){
-  var t = $("#scTrack"); if (!t) return;
-  t.scrollTo({ left: i * scStep(), behavior: "smooth" });
+function sRender(){
+  var track = $("#scTrack"); if (!track || !track.children.length) return;
+  var n = snackList().length; if (!n) return;
+  var P = sPitch(); if (!P) return;
+  for (var i=0;i<track.children.length;i++){
+    var d = hWrapD(i - sPos, n);
+    var ad = Math.abs(d);
+    var x = d * P;
+    var s = track.children[i];
+    s.style.transform = "translateY(-50%) translateX(" + x.toFixed(1) + "px)";
+    /* sama seperti hero: saat diam hanya camilan yang tampil yang
+       terlihat; tetangga (|d| >= 1) tersembunyi penuh dan hanya muncul
+       selama transisi — masuk tepat di samping camilan yang tampil
+       karena pitch antar slide rapat. Ukuran gambar TIDAK berubah
+       (tanpa scale): carousel camilan geser horizontal biasa. */
+    if (ad >= 1) {
+      s.style.opacity = "0";
+      s.style.visibility = "hidden";
+    } else {
+      var op = 1 - 0.25 * ad;
+      if (ad > 0.85) op *= (1 - ad) / 0.15;
+      s.style.opacity = String(Math.max(op, 0).toFixed(3));
+      s.style.visibility = "visible";
+    }
+    s.style.zIndex = String(10 - Math.round(ad * 2));
+  }
+  var idx = ((Math.round(sPos) % n) + n) % n;
+  if (idx !== scIdx) {
+    scIdx = idx;
+    updateSnackCard();
+  }
 }
-function bindSnackNav(){
+function sTween(target){
+  if (sAnim) cancelAnimationFrame(sAnim);
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced) { sPos = target; sRender(); return; }
+  var from = sPos, t0 = null, dur = 620;
+  function step(ts){
+    if (!t0) t0 = ts;
+    var k = Math.min((ts - t0) / dur, 1);
+    var e = 1 - Math.pow(1 - k, 3);
+    sPos = from + (target - from) * e;
+    sRender();
+    if (k < 1) sAnim = requestAnimationFrame(step);
+    else { sAnim = null; sPos = target; sRender(); }
+  }
+  sAnim = requestAnimationFrame(step);
+}
+function bindSnackTrack(){
   var track = $("#scTrack");
-  track.addEventListener("scroll", function(){
-    if (scScrollTimer) clearTimeout(scScrollTimer);
-    scScrollTimer = setTimeout(function(){
-      var step = scStep(); if (!step) return;
-      var i = Math.max(0, Math.min(snackList().length - 1, Math.round(track.scrollLeft / step)));
-      if (i !== scIdx) { scIdx = i; updateSnackCard(); }
-    }, 120);
-  }, { passive: true });
-  /* geser pakai jari/mouse: pointer ditangkap selama drag berlangsung,
-     posisi track mengikuti gerakan, saat dilepas snap ke camilan terdekat
-     dengan threshold kecil. Berlaku untuk mouse DAN sentuh (geser vertikal
-     tetap menggulir halaman berkat touch-action: pan-y). */
-  var drag = null, lastUpAt = 0, lastMoved = 0, suppressClickUntil = 0, scSnapTimer = null;
+  /* matikan drag & seleksi bawaan browser: gambar produk tidak boleh
+     terseleksi biru atau ter-ghost saat digeser */
   track.addEventListener("dragstart", function(e){ e.preventDefault(); });
   track.addEventListener("selectstart", function(e){ e.preventDefault(); });
+  /* geser pakai jari/mouse: posisi mengikuti pointer secara kontinu,
+     saat dilepas snap ke camilan terdekat. Berlaku untuk mouse DAN
+     sentuh (geser vertikal tetap menggulir halaman berkat
+     touch-action: pan-y). Ketuk (tanpa geser) membuka detail camilan. */
   track.addEventListener("pointerdown", function(e){
     scPause();
-    if (scSnapTimer) { clearTimeout(scSnapTimer); scSnapTimer = null; }
-    drag = { x0: e.clientX, sl: track.scrollLeft, moved: 0, idx0: scIdx };
-    track.classList.add("dragging");
+    if (e.pointerType === "mouse") e.preventDefault();
+    if (sAnim) { cancelAnimationFrame(sAnim); sAnim = null; }
+    sDrag = { x0: e.clientX, pos0: sPos, moved: 0 };
+    /* tangkap pointer: gerakan tetap terbaca walau jari/mouse keluar stage */
     if (track.setPointerCapture && e.pointerId !== undefined) {
       try { track.setPointerCapture(e.pointerId); } catch (err) {}
     }
   });
   track.addEventListener("pointermove", function(e){
-    if (!drag) return;
-    var dx = e.clientX - drag.x0;
-    drag.moved = Math.max(drag.moved, Math.abs(dx));
-    var max = track.scrollWidth - track.clientWidth;
-    track.scrollLeft = Math.max(0, Math.min(max, drag.sl - dx));
+    if (!sDrag) return;
+    var dx = e.clientX - sDrag.x0;
+    sDrag.moved = Math.max(sDrag.moved, Math.abs(dx));
+    sPos = sDrag.pos0 - dx / Math.max(sPitch(), 1);
+    sRender();
   });
-  function endDrag(){
-    if (!drag) return null;
-    lastMoved = drag.moved; lastUpAt = Date.now();
-    var wasTap = drag.moved <= 8;
-    var startIdx = drag.idx0;
-    drag = null;
-    var step = scStep();
-    if (!step) { track.classList.remove("dragging"); return null; }
-    var rel = track.scrollLeft / step - startIdx;
-    var target = startIdx;
-    if (Math.abs(rel) > 0.15) target = startIdx + (rel > 0 ? 1 : -1) * Math.max(1, Math.round(Math.abs(rel)));
-    target = Math.max(0, Math.min(snackList().length - 1, target));
-    /* scroll ke target SELAGI scroll-snap masih mati (kelas .dragging):
-       menghidupkan snap sebelum scroll selesai membuat browser men-snap
-       paksa ke titik terdekat dari posisi lepas dan membatalkan scrollTo.
-       Kelas baru dilepas setelah scroll tiba di titik snap tujuan. */
-    track.scrollTo({ left: target * step, behavior: "smooth" });
-    if (target !== scIdx) { scIdx = target; updateSnackCard(); }
-    if (scSnapTimer) clearTimeout(scSnapTimer);
-    scSnapTimer = setTimeout(function(){ track.classList.remove("dragging"); scSnapTimer = null; }, 450);
-    return wasTap;
+  function sSnap(){
+    /* snap ke camilan terdekat dengan threshold kecil: geser lebih dari
+       15% langkah saja sudah pindah ke camilan sebelah */
+    var base = Math.round(sDrag.pos0);
+    var rel = sPos - base;
+    var target = base;
+    if (Math.abs(rel) > 0.15) target = base + (rel > 0 ? 1 : -1) * Math.max(1, Math.round(Math.abs(rel)));
+    sTween(target);
   }
-  track.addEventListener("pointerup", function(e){
-    var wasTap = endDrag();
-    if (wasTap) {
-      /* pointer capture membuat target klik menjadi track, jadi buka
-         detail camilan dari titik sentuh/klik secara manual */
-      var el = document.elementFromPoint ? document.elementFromPoint(e.clientX, e.clientY) : null;
-      var opener = el && el.closest ? el.closest("[data-open]") : null;
-      if (opener) { suppressClickUntil = Date.now() + 350; openItem(opener.getAttribute("data-open")); }
-    }
+  track.addEventListener("pointerup", function(){
+    if (!sDrag) return;
+    var wasDrag = sDrag.moved > 8;
+    sSnap();
+    sDrag = null;
+    if (!wasDrag) { var it = snackList()[scIdx]; if (it) openItem(it.id); }
   });
-  track.addEventListener("pointercancel", function(){ endDrag(); });
-  track.addEventListener("click", function(e){
-    if (Date.now() < suppressClickUntil || (Date.now() - lastUpAt < 200 && lastMoved > 8)) { e.stopPropagation(); e.preventDefault(); }
-  }, true);
+  track.addEventListener("pointercancel", function(){
+    if (sDrag) { sSnap(); sDrag = null; }
+  });
+  window.addEventListener("resize", sRender);
 }
 
 /* ================= SHEETS ================= */
