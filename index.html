@@ -43,10 +43,11 @@ button{font:inherit;cursor:pointer}
 /* ---------- panggung hero: stage FIX di atas latar statis; produk cutout
    bergerak scale kecil -> besar -> kecil; kartu nama/harga/stepper FIX ---------- */
 .hero{position:relative;margin:4px -14px 0}
-.hero-stage{position:relative;height:min(46dvh,540px);min-height:320px;overflow:hidden;touch-action:pan-y;cursor:grab}
+.hero-stage{position:relative;height:min(46dvh,540px);min-height:320px;overflow:hidden;touch-action:pan-y;cursor:grab;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .hero-stage:active{cursor:grabbing}
 .hslide{position:absolute;left:50%;top:50%;height:94%;display:flex;align-items:center;justify-content:center;will-change:transform,opacity;pointer-events:none}
 .hslide img{height:100%;width:auto;max-width:none;filter:drop-shadow(0 22px 22px rgba(0,0,0,.5))}
+.hero-stage img,.sc-track img{-webkit-user-drag:none;-webkit-user-select:none;user-select:none}
 .hero-card{position:absolute;right:14px;top:50%;transform:translateY(-50%);z-index:30;max-width:48%;pointer-events:none}
 .hero-card .stepper{pointer-events:auto}
 .hero-card h3{font-family:"Great Vibes",cursive;font-weight:400;font-size:clamp(27px,8vw,38px);line-height:1.05;margin:0;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.7);white-space:nowrap}
@@ -57,7 +58,8 @@ button{font:inherit;cursor:pointer}
    (tanpa perubahan ukuran); kartu nama/harga/stepper FIX kiri bawah ---------- */
 .snack-sec{position:relative;margin:0 -14px}
 .snack-stage{position:relative;height:198px;overflow:hidden}
-.sc-track{position:absolute;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}
+.sc-track{position:absolute;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:grab}
+.sc-track:active{cursor:grabbing}
 .sc-track::-webkit-scrollbar{display:none}
 .sc-track.dragging{scroll-snap-type:none}
 .s-slide{flex:0 0 100%;scroll-snap-align:start;display:flex;align-items:center;justify-content:flex-end;padding:8px 16px 8px 46%;cursor:pointer}
@@ -577,10 +579,16 @@ function updateHeroCard(){
 }
 function bindHeroStage(){
   var stage = $("#heroStage");
+  /* matikan drag & seleksi bawaan browser: gambar produk tidak boleh
+     terseleksi biru atau ter-ghost saat digeser */
+  stage.addEventListener("dragstart", function(e){ e.preventDefault(); });
+  stage.addEventListener("selectstart", function(e){ e.preventDefault(); });
   stage.addEventListener("pointerdown", function(e){
     hcPause();
+    if (e.pointerType === "mouse") e.preventDefault();
     if (hAnim) { cancelAnimationFrame(hAnim); hAnim = null; }
     hDrag = { x0: e.clientX, pos0: hPos, moved: 0 };
+    /* tangkap pointer: gerakan tetap terbaca walau jari/mouse keluar stage */
     if (stage.setPointerCapture && e.pointerId !== undefined) {
       try { stage.setPointerCapture(e.pointerId); } catch (err) {}
     }
@@ -592,15 +600,24 @@ function bindHeroStage(){
     hPos = hDrag.pos0 - dx / Math.max(stage.clientWidth * 0.52, 1);
     hRender();
   });
+  function hSnap(){
+    /* snap ke produk terdekat dengan threshold kecil: geser lebih dari
+       15% langkah saja sudah pindah ke produk sebelah */
+    var base = Math.round(hDrag.pos0);
+    var rel = hPos - base;
+    var target = base;
+    if (Math.abs(rel) > 0.15) target = base + (rel > 0 ? 1 : -1) * Math.max(1, Math.round(Math.abs(rel)));
+    hTween(target);
+  }
   stage.addEventListener("pointerup", function(){
     if (!hDrag) return;
     var wasDrag = hDrag.moved > 8;
+    hSnap();
     hDrag = null;
-    hTween(Math.round(hPos));
     if (!wasDrag) { var it = heroList()[hcIdx]; if (it) openItem(it.id); }
   });
   stage.addEventListener("pointercancel", function(){
-    if (hDrag) { hDrag = null; hTween(Math.round(hPos)); }
+    if (hDrag) { hSnap(); hDrag = null; }
   });
   window.addEventListener("resize", hRender);
 }
@@ -679,36 +696,65 @@ function bindSnackNav(){
       if (i !== scIdx) { scIdx = i; updateSnackCard(); }
     }, 120);
   }, { passive: true });
-  /* geser pakai mouse (drag) — sentuh memakai scroll bawaan */
-  var drag = null, lastUpAt = 0, lastMoved = 0;
+  /* geser pakai jari/mouse: pointer ditangkap selama drag berlangsung,
+     posisi track mengikuti gerakan, saat dilepas snap ke camilan terdekat
+     dengan threshold kecil. Berlaku untuk mouse DAN sentuh (geser vertikal
+     tetap menggulir halaman berkat touch-action: pan-y). */
+  var drag = null, lastUpAt = 0, lastMoved = 0, suppressClickUntil = 0, scSnapTimer = null;
+  track.addEventListener("dragstart", function(e){ e.preventDefault(); });
+  track.addEventListener("selectstart", function(e){ e.preventDefault(); });
   track.addEventListener("pointerdown", function(e){
     scPause();
-    if (e.pointerType === "mouse") {
-      drag = { x0: e.clientX, sl: track.scrollLeft, moved: 0 };
-      track.classList.add("dragging");
+    if (scSnapTimer) { clearTimeout(scSnapTimer); scSnapTimer = null; }
+    drag = { x0: e.clientX, sl: track.scrollLeft, moved: 0, idx0: scIdx };
+    track.classList.add("dragging");
+    if (track.setPointerCapture && e.pointerId !== undefined) {
+      try { track.setPointerCapture(e.pointerId); } catch (err) {}
     }
   });
   track.addEventListener("pointermove", function(e){
     if (!drag) return;
     var dx = e.clientX - drag.x0;
     drag.moved = Math.max(drag.moved, Math.abs(dx));
-    track.scrollLeft = drag.sl - dx;
+    var max = track.scrollWidth - track.clientWidth;
+    track.scrollLeft = Math.max(0, Math.min(max, drag.sl - dx));
   });
   function endDrag(){
-    if (!drag) return;
+    if (!drag) return null;
     lastMoved = drag.moved; lastUpAt = Date.now();
+    var wasTap = drag.moved <= 8;
+    var startIdx = drag.idx0;
     drag = null;
-    track.classList.remove("dragging");
-    var step = scStep(); if (!step) return;
-    var i = Math.max(0, Math.min(snackList().length - 1, Math.round(track.scrollLeft / step)));
-    track.scrollTo({ left: i * step, behavior: "smooth" });
+    var step = scStep();
+    if (!step) { track.classList.remove("dragging"); return null; }
+    var rel = track.scrollLeft / step - startIdx;
+    var target = startIdx;
+    if (Math.abs(rel) > 0.15) target = startIdx + (rel > 0 ? 1 : -1) * Math.max(1, Math.round(Math.abs(rel)));
+    target = Math.max(0, Math.min(snackList().length - 1, target));
+    /* scroll ke target SELAGI scroll-snap masih mati (kelas .dragging):
+       menghidupkan snap sebelum scroll selesai membuat browser men-snap
+       paksa ke titik terdekat dari posisi lepas dan membatalkan scrollTo.
+       Kelas baru dilepas setelah scroll tiba di titik snap tujuan. */
+    track.scrollTo({ left: target * step, behavior: "smooth" });
+    if (target !== scIdx) { scIdx = target; updateSnackCard(); }
+    if (scSnapTimer) clearTimeout(scSnapTimer);
+    scSnapTimer = setTimeout(function(){ track.classList.remove("dragging"); scSnapTimer = null; }, 450);
+    return wasTap;
   }
-  track.addEventListener("pointerup", endDrag);
-  track.addEventListener("pointercancel", endDrag);
+  track.addEventListener("pointerup", function(e){
+    var wasTap = endDrag();
+    if (wasTap) {
+      /* pointer capture membuat target klik menjadi track, jadi buka
+         detail camilan dari titik sentuh/klik secara manual */
+      var el = document.elementFromPoint ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      var opener = el && el.closest ? el.closest("[data-open]") : null;
+      if (opener) { suppressClickUntil = Date.now() + 350; openItem(opener.getAttribute("data-open")); }
+    }
+  });
+  track.addEventListener("pointercancel", function(){ endDrag(); });
   track.addEventListener("click", function(e){
-    if (Date.now() - lastUpAt < 200 && lastMoved > 8) { e.stopPropagation(); e.preventDefault(); }
+    if (Date.now() < suppressClickUntil || (Date.now() - lastUpAt < 200 && lastMoved > 8)) { e.stopPropagation(); e.preventDefault(); }
   }, true);
-  track.addEventListener("touchstart", scPause, { passive: true });
 }
 
 /* ================= SHEETS ================= */
